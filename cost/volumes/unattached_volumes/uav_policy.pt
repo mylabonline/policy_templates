@@ -2,12 +2,12 @@ name "Unattached Volumes"
 rs_pt_ver 20180301
 type "policy"
 short_description "Finds unattached volumes older than specified number of days and, optionally, deletes them. See the [README](https://github.com/rightscale/policy_templates/tree/master/cost/volumes/unattached_volumes) and [docs.rightscale.com/policies](http://docs.rightscale.com/policies/) to learn more."
-long_description "Version: 1.7"
+long_description "Version: 1.8"
 severity "medium"
 category "Cost"
 
 permission "general_permissions" do
-  resources "rs_cm.volumes", "rs_cm.audit_entries", "rs_cm.placement_groups", "rs_cm.clouds", "rs_cm.tags", "rs_cm.deployments"
+  resources "rs_cm.volumes", "rs_cm.audit_entries", "rs_cm.placement_groups", "rs_cm.clouds", "rs_cm.tags", "rs_cm.deployments", "rs_cm.volume_snapshots"
   actions   "rs_cm.*"
 end
 
@@ -38,6 +38,12 @@ end
 parameter "param_email" do
   type "list"
   label "Email addresses of the recipients you wish to notify"
+end
+
+parameter "param_take_snapshot" do
+  type "string"
+  label "Take snapshot before delete, may incur costs"
+  allowed_values "true", "false"
 end
 
 resources "clouds", type: "rs_cm.clouds" 
@@ -309,18 +315,25 @@ escalation "send_email_report" do
 end
   
 escalation "process_volumes" do
-  run "delete_volumes", data
+  run "delete_volumes", data, $param_take_snapshot
   # remove the "Processing volumes" incident since it's a done deal at this point.
   resolve_incident
 end
   
-define delete_volumes($data) do
+define delete_volumes($data,$param_take_snapshot) do
   foreach $item in $data do
     if $item["action"] == "DELETE"
       # If the delete fails, tag the volume with some info about the failure
       sub on_error: handle_delete_failure(@volume) do
         # Find the volume
         @volume = rs_cm.get(href: $item["href"])
+        if $param_take_snapshot == "true"
+          rs_cm.volume_snapshots.create(volume_snapshot: {
+              name: join([@volume.name, '-snapshot-taken-by-policy']),
+              parent_volume_href: @volume.href
+            }
+          )
+        end
         # Delete the volume 
         delete(@volume)
       end
